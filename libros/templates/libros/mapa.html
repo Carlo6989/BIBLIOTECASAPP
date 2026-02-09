@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa de Bibliotecas</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .header {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white; padding: 30px; text-align: center;
+        }
+        #map { height: 600px; width: 100%; background-color: #e5e3df; }
+        .info-panel { padding: 20px; background: #f8f9fa; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 15px; flex-wrap: wrap; }
+        .btn {
+            background: #11998e; color: white; padding: 10px 20px;
+            border: none; border-radius: 5px; cursor: pointer;
+            transition: background 0.3s;
+        }
+        .btn:hover { background: #0d7a6f; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        #contador { font-weight: bold; color: #555; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗺️ Mapa de Bibliotecas de México</h1>
+            <p>Encuentra la biblioteca más cercana</p>
+        </div>
+        
+        <div class="info-panel">
+            <button class="btn" onclick="obtenerMiUbicacion()">📍 Usar mi ubicación</button>
+            <button class="btn" id="btnRecargar" onclick="cargarBibliotecas()">🔄 Recargar bibliotecas</button>
+            <span id="contador">Bibliotecas cargadas: 0</span>
+        </div>
+        
+        <div id="map"></div>
+    </div>
+
+    <script>
+        // Variables globales
+        let map;
+        let markers = [];
+        let estaCargando = false;
+        let AdvancedMarkerElement; // Guardaremos la referencia aquí
+
+        // 1. Función de inicialización (llamada por el callback de Google)
+        async function initMap() {
+            console.log('🗺️ Inicializando mapa...');
+            
+            try {
+                // Importar librerías necesarias
+                const { Map } = await google.maps.importLibrary("maps");
+                const { AdvancedMarkerElement: MarkerLib } = await google.maps.importLibrary("marker");
+                AdvancedMarkerElement = MarkerLib;
+
+                const centroMexico = { lat: 19.4326, lng: -99.1332 };
+                
+                map = new Map(document.getElementById('map'), {
+                    center: centroMexico,
+                    zoom: 5,
+                    mapId: "DEMO_MAP_ID", // Requerido para marcadores modernos
+                    mapTypeControl: true,
+                    streetViewControl: true,
+                    fullscreenControl: true,
+                    zoomControl: true
+                });
+
+                console.log("✅ Mapa listo");
+                
+                // Cargar datos automáticamente al iniciar
+                await cargarBibliotecas();
+                
+            } catch (error) {
+                console.error("❌ Error inicializando el mapa:", error);
+            }
+        }
+
+        // 2. Función para traer datos de Django
+        async function cargarBibliotecas() {
+            if (estaCargando) return;
+            
+            const btn = document.getElementById('btnRecargar');
+            if (btn) btn.disabled = true;
+            
+            console.log('📚 Consultando API de bibliotecas...');
+            estaCargando = true;
+
+            try {
+                const response = await fetch('/api/bibliotecas/', {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                });
+
+                if (!response.ok) throw new Error(`Error HTTP: ${response.status}`);
+                
+                const data = await response.json();
+                console.log('✅ Datos recibidos:', data);
+
+                limpiarMarcadores();
+                
+                let contador = 0;
+                data.forEach(biblioteca => {
+                    if (biblioteca.latitud && biblioteca.longitud) {
+                        crearMarcador(biblioteca);
+                        contador++;
+                    }
+                });
+
+                document.getElementById('contador').textContent = `Bibliotecas cargadas: ${contador}`;
+                
+            } catch (error) {
+                console.error('❌ Error en fetch:', error);
+                alert("No se pudieron cargar las bibliotecas.");
+            } finally {
+                estaCargando = false;
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // 3. Crear marcador moderno
+        function crearMarcador(biblioteca) {
+            const marker = new AdvancedMarkerElement({
+                map: map,
+                position: {
+                    lat: parseFloat(biblioteca.latitud),
+                    lng: parseFloat(biblioteca.longitud)
+                },
+                title: biblioteca.nombre,
+            });
+
+            const infoWindow = new google.maps.InfoWindow({
+                content: `
+                    <div style="color: #333; padding: 10px; max-width: 200px;">
+                        <h3 style="color: #11998e; margin-bottom: 5px;">${biblioteca.nombre}</h3>
+                        <p style="margin-bottom: 5px;"><strong>📍 Ciudad:</strong> ${biblioteca.ciudad}</p>
+                        <p style="margin-bottom: 10px;"><strong>🕒 Horario:</strong> ${biblioteca.horario || 'No disponible'}</p>
+                        <a href="${biblioteca.google_maps_url || '#'}" target="_blank" 
+                           style="display: inline-block; background: #764ba2; color: white; padding: 5px 10px; text-decoration: none; border-radius: 4px; font-size: 12px;">
+                           Ver en Google Maps
+                        </a>
+                    </div>`
+            });
+
+            marker.addListener('click', () => {
+                // Cerrar otras ventanas si existieran (opcional)
+                infoWindow.open(map, marker);
+            });
+
+            markers.push(marker);
+        }
+
+        // 4. Geolocalización del usuario
+        function obtenerMiUbicacion() {
+            if (!map) return;
+            
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition((position) => {
+                    const pos = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    };
+                    map.setCenter(pos);
+                    map.setZoom(14);
+                    
+                    // Marcador de usuario (simple para diferenciarlo)
+                    new google.maps.Marker({
+                        position: pos,
+                        map: map,
+                        title: "Estás aquí",
+                        icon: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+                    });
+                }, () => {
+                    alert("Error: El servicio de ubicación falló o fue denegado.");
+                });
+            } else {
+                alert("Tu navegador no soporta geolocalización.");
+            }
+        }
+
+        // 5. Limpiar mapa
+        function limpiarMarcadores() {
+            markers.forEach(m => m.map = null);
+            markers = [];
+        }
+    </script>
+
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&callback=initMap&loading=async" async defer></script>
+</body>
+</html>
